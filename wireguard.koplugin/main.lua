@@ -1,4 +1,5 @@
 local DataStorage = require("datastorage")
+local Dispatcher = require("dispatcher")
 local Font = require("ui/font")
 local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
@@ -46,9 +47,38 @@ function WireGuard:init()
     local ok, meta = pcall(dofile, meta_path)
     self.meta = ok and meta or {}
 
+    self:onDispatcherRegisterActions()
+
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
+end
+
+function WireGuard:onDispatcherRegisterActions()
+    Dispatcher:registerAction("wireguard_connect",    { category="none", event="WireguardConnect",    title=_("WireGuard connect"),    general=true,})
+    Dispatcher:registerAction("wireguard_disconnect", { category="none", event="WireguardDisconnect", title=_("WireGuard disconnect"), general=true,})
+    Dispatcher:registerAction("wireguard_toggle",     { category="none", event="WireguardToggle",     title=_("WireGuard toggle"),     general=true,})
+    Dispatcher:registerAction("wireguard_status",     { category="none", event="WireguardStatus",     title=_("WireGuard status"),     general=true, separator=true,})
+end
+
+function WireGuard:onWireguardConnect()
+    self:connect()
+end
+
+function WireGuard:onWireguardDisconnect()
+    self:disconnect()
+end
+
+function WireGuard:onWireguardToggle()
+    if self:isUp() then
+        self:disconnect()
+    else
+        self:connect()
+    end
+end
+
+function WireGuard:onWireguardStatus()
+    self:showStatus()
 end
 
 function WireGuard:missingRequirements()
@@ -411,6 +441,11 @@ function WireGuard:_doConnect(config)
 end
 
 function WireGuard:connect(touchmenu_instance)
+    if not self:hasRequirements() then
+        info(_("Missing requirements:\n  ") .. table.concat(self:missingRequirements(), "\n  "), 8)
+        return
+    end
+
     local configs = self:getConfigs()
     if #configs == 0 then
         info(_("No .conf files found.\n\nPlace WireGuard configs in:\n") .. self.conf_dir .. "/", 6)
@@ -545,10 +580,6 @@ function WireGuard:addToMainMenu(menu_items)
                 end,
                 keep_menu_open = true,
                 callback = function(touchmenu_instance)
-                    if not self:hasRequirements() then
-                        info(_("Missing requirements:\n  ") .. table.concat(self:missingRequirements(), "\n  "), 8)
-                        return
-                    end
                     if self:isUp() then
                         self:disconnect(touchmenu_instance)
                     else

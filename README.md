@@ -89,7 +89,16 @@ Restart KOReader. Plugin appears under **Network > WireGuard VPN**.
 
 ## Use
 
-Open **Network > WireGuard VPN**. The first item toggles the tunnel: it connects when you're off and disconnects when you're on, prompting you to pick a config if you have more than one. **Status** is there when something's wrong. It tells you which binaries are missing, prints `wg show` if a tunnel is up and lists the configs it found.
+The plugin lives under Network > WireGuard VPN. Tap the first item to bring the tunnel up or down, picking a config if there's more than one. Tap Status to see which binaries are present, the current `wg show` output and the configs the plugin found.
+
+### Gestures and profiles
+
+Four actions are registered with KOReader's Dispatcher and show up under Gesture Manager > General (or in any profile):
+
+- WireGuard connect
+- WireGuard disconnect
+- WireGuard toggle
+- WireGuard status
 
 ## SSH
 
