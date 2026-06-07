@@ -21,7 +21,7 @@ jobs:
                   cp LICENSE wireguard.koplugin/LICENSE
                   mkdir -p dist
                   zip -r "dist/wireguard.koplugin-${GITHUB_REF_NAME}.zip" wireguard.koplugin \
-                    --exclude 'wireguard.koplugin/configs/*'
+                    --exclude 'wireguard.koplugin/configs/*.conf'
 
             - name: Create release
               uses: softprops/action-gh-release@v3
