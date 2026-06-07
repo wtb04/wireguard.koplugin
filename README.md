@@ -75,7 +75,7 @@ Download the latest `wireguard.koplugin-vX.Y.Z.zip` from the [releases page](../
 /mnt/onboard/.adds/koreader/plugins/wireguard.koplugin/
 ```
 
-(Or clone this repo into your plugins folder as `wireguard.koplugin/`
+(Or clone this repo into your plugins folder as `wireguard.koplugin/`)
 
 Put your `.conf` files in the `configs/` folder:
 
