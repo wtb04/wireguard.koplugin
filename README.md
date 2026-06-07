@@ -1,6 +1,6 @@
 # WireGuard for KOReader
 
-A [KOReader](https://github.com/koreader/koreader) plugin to bring a WireGuard VPN up and down from the menu.
+A [KOReader](https://github.com/koreader/koreader) plugin to bring a WireGuard® VPN up and down from the menu.
 
 I am not affiliated with KOReader or with WireGuard. Just a wrapper I made for my own use.
 
@@ -109,3 +109,7 @@ If you haven't enabled SSH on your e-reader yet, follow this guide: <https://dmp
 MIT, see [LICENSE](LICENSE).
 
 Made by [Wouter ten Brinke](https://woutertenbrinke.nl).
+
+## Trademarks
+
+"[WireGuard](https://www.wireguard.com/)" and the "WireGuard" logo are registered trademarks of Jason A. Donenfeld. This project is not affiliated with, endorsed by or sponsored by the WireGuard project, Jason A. Donenfeld, zx2c4 or Edge Security LLC.
