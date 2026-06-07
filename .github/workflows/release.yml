@@ -18,10 +18,10 @@ jobs:
             - name: Build plugin zip
               run: |
                   set -eu
-                  cp LICENSE wireguard.koplugin/LICENSE
-                  mkdir -p dist
-                  zip -r "dist/wireguard.koplugin-${GITHUB_REF_NAME}.zip" wireguard.koplugin \
-                    --exclude 'wireguard.koplugin/configs/*.conf'
+                  mkdir -p dist staging/wireguard.koplugin/configs
+                  cp _meta.lua main.lua LICENSE README.md staging/wireguard.koplugin/
+                  cp configs/.gitkeep staging/wireguard.koplugin/configs/
+                  (cd staging && zip -r "../dist/wireguard.koplugin-${GITHUB_REF_NAME}.zip" wireguard.koplugin)
 
             - name: Create release
               uses: softprops/action-gh-release@v3
