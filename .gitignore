@@ -1,0 +1,5 @@
+.DS_Store
+dist/
+*.conf
+wireguard.koplugin/configs/*
+!wireguard.koplugin/configs/.gitkeep
