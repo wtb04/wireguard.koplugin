@@ -560,6 +560,9 @@ function WireGuard:showStatus()
     table.insert(lines, "")
     table.insert(lines, _("Made by Wouter ten Brinke"))
     table.insert(lines, "https://woutertenbrinke.nl")
+    table.insert(lines, "")
+    table.insert(lines, _("\"WireGuard\" is a registered trademark of Jason A. Donenfeld. This plugin is not affiliated with or endorsed by the WireGuard project."))
+    table.insert(lines, "https://www.wireguard.com/")
 
     UIManager:show(InfoMessage:new{
         text = table.concat(lines, "\n"),
