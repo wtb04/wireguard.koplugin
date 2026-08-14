@@ -14,6 +14,15 @@ Tested only on a **Kobo Clara Colour**. Other Kobo models will probably work, ot
 |---|---|---|
 | ![Menu location](screenshots/settings.png) | ![Config picker](screenshots/config-picker.png) | ![Status screen](screenshots/status.png) |
 
+## Compatibility
+
+| Device | Status | Notes |
+|---|---|---|
+| Kobo Clara Colour | Tested | My own device |
+| Other Kobo models | Expected to work | Reports welcome |
+| Kindle | Untested | I have no way to test this. If you got it working, let me know how so I can update this |
+| Android | Not the target | |
+
 ## 1. Build the binaries
 
 WireGuard binaries don't ship on Kobo devices, and at the time of writing there are no pre-built binaries available from reputable sources, so you have to cross-compile them yourself. Kobo kernels are also too old to include the WireGuard kernel module, which is why `wireguard-go` (the userspace implementation) is required alongside `wg`.
@@ -103,6 +112,56 @@ Four actions are registered with KOReader's Dispatcher and show up under Gesture
 ## SSH
 
 If you haven't enabled SSH on your e-reader yet, follow this guide: <https://dmpop.github.io/koreader-compendium/16-ssh/>.
+
+## FAQ and troubleshooting
+
+**Why not the normal WireGuard kernel module?**
+
+Kobo kernels are too old to include it, so there is nothing to enable.
+
+**Why wireguard-go?**
+
+It is the userspace implementation, so it runs without the kernel module. It does need `/dev/net/tun`, which step 2 covers.
+
+**Which devices work?**
+
+See [Compatibility](#compatibility).
+
+**Where do the .conf files go?**
+
+In the plugin's own `configs/` folder:
+
+```
+/mnt/onboard/.adds/koreader/plugins/wireguard.koplugin/configs/
+```
+
+The filename without `.conf` becomes the interface name.
+
+**Does it work with Calibre?**
+
+Yes, that is what I built it for. Bring the tunnel up and KOReader's Calibre plugin can reach the Calibre instance on your home network without it being exposed to the internet.
+
+**Why not Tailscale?**
+
+If you do not specifically need WireGuard, use the Tailscale plugin linked at the top. I already ran a WireGuard server at home, so adding a second overlay network just for the e-reader was not worth it.
+
+**The tunnel does not come up**
+
+Open Status first. It shows which binaries are present, the current `wg show` output and the configs the plugin found, which usually points straight at the cause. After that, check:
+
+- `/dev/net/tun` exists
+- `uname -m` on the device matches the arch you built the binaries for
+- the config file ends in `.conf` and sits in the folder above
+
+**Names stop resolving after connecting**
+
+Bringing the tunnel up writes the DNS from your config into `/etc/resolv.conf` and keeps the original at `/tmp/resolv.wg.bak`. Disconnecting puts it back. If a disconnect never ran, because KOReader was killed or the battery went flat, the old DNS is still in that backup:
+
+```sh
+cp /tmp/resolv.wg.bak /etc/resolv.conf
+```
+
+`/tmp` is cleared on reboot, so do this before restarting the device.
 
 ## License
 
