@@ -57,7 +57,12 @@ local function isIP(s)
 end
 
 local function isHostname(s)
-    return #s <= 253 and s:match("^%w[%w%.%-]*$") ~= nil
+    return #s <= 253 and s:match("^[%w_][%w%._%-]*$") ~= nil
+end
+
+-- Device names can carry a vlan or alias suffix, e.g. eth0.100 or wlan0:1.
+local function isDeviceName(s)
+    return s:match("^[%w_][%w_%-%.:]*$") ~= nil
 end
 
 local function isCIDR(s)
@@ -223,11 +228,11 @@ local function parseStoredRoute(line)
     local dest, gw, dev = line:match("^(%S+) via (%S+) dev (%S+)$")
     if dest then
         if not (isCIDR(dest) or isIP(dest)) then return nil end
-        if not isIP(gw) or not dev:match("^[%w_%-]+$") then return nil end
+        if not isIP(gw) or not isDeviceName(dev) then return nil end
         return "ip route del " .. shquote(dest) .. " via " .. shquote(gw) .. " dev " .. shquote(dev)
     end
     dest, dev = line:match("^(%S+) dev (%S+)$")
-    if dest and (isCIDR(dest) or isIP(dest)) and dev:match("^[%w_%-]+$") then
+    if dest and (isCIDR(dest) or isIP(dest)) and isDeviceName(dev) then
         return "ip route del " .. shquote(dest) .. " dev " .. shquote(dev)
     end
     return nil
@@ -280,10 +285,9 @@ function WireGuard:killProcess(iface_name)
 end
 
 function WireGuard:waitForInterface(iface_name, attempts)
-    for _ = 1, attempts or 6 do
+    for _i = 1, attempts or 6 do
         os.execute("sleep 0.5")
-        local _ok, out = exec("ip link show " .. shquote(iface_name))
-        if (out or ""):find(iface_name, 1, true) then return true end
+        if self:_isInterfacePresent(iface_name) then return true end
     end
     return false
 end
@@ -328,13 +332,14 @@ function WireGuard:_loadAndValidateConfig(config)
     end
 
     for _i, dns in ipairs(iface.dns) do
-        if not isIP(dns) then
-            return nil, _("DNS '") .. dns .. _("' is not a valid IP address.")
+        -- wg-quick allows search domains here alongside resolvers.
+        if not (isIP(dns) or isHostname(dns)) then
+            return nil, _("DNS '") .. dns .. _("' is not a valid address or domain.")
         end
     end
 
     for _i, cidr in ipairs(iface.allowed_ips) do
-        if not isCIDR(cidr) then
+        if not (isCIDR(cidr) or isIP(cidr)) then
             return nil, _("AllowedIPs entry '") .. cidr .. _("' is not a valid network.")
         end
     end
@@ -470,7 +475,15 @@ function WireGuard:_writeResolvConf(dns, warnings)
     end
     local r = io.open("/etc/resolv.conf", "w")
     if r then
-        for _, d in ipairs(dns) do r:write("nameserver " .. d .. "\n") end
+        local search = {}
+        for _, d in ipairs(dns) do
+            if isIP(d) then
+                r:write("nameserver " .. d .. "\n")
+            else
+                table.insert(search, d)
+            end
+        end
+        if #search > 0 then r:write("search " .. table.concat(search, " ") .. "\n") end
         r:close()
     else
         table.insert(warnings, "Could not write /etc/resolv.conf")

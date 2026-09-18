@@ -19,10 +19,18 @@ jobs:
 
             - name: Read the tag message
               run: |
+                  set -eu
+                  notes=
+                  if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag" ]; then
+                      notes=$(git tag -l \
+                          --format='%(contents:subject)%0a%0a%(contents:body)' \
+                          "$GITHUB_REF_NAME")
+                  fi
+                  delim="NOTES_EOF_${GITHUB_RUN_ID}"
                   {
-                    echo 'NOTES<<RELEASE_NOTES_EOF'
-                    git tag -l --format='%(contents)' "$GITHUB_REF_NAME"
-                    echo RELEASE_NOTES_EOF
+                    echo "NOTES<<${delim}"
+                    echo "$notes"
+                    echo "${delim}"
                   } >> "$GITHUB_ENV"
 
             - name: Build plugin zip
