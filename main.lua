@@ -309,6 +309,10 @@ function WireGuard:_loadAndValidateConfig(config)
     if not iface_name:match("^[%w_%-]+$") then
         return nil, _("Invalid config name. Use only letters, digits, '_' and '-'.")
     end
+    -- The filename becomes the interface name, and the kernel caps that at 15.
+    if #iface_name > 15 then
+        return nil, _("Config name '") .. iface_name .. _("' is too long.\n\nThe filename becomes the interface name, so it can be at most 15 characters.")
+    end
 
     local wg_conf, iface, raw = self:parseConfig(config.path)
     if not wg_conf then

@@ -115,10 +115,18 @@ os.remove(bad_allowed)
 check("bad AllowedIPs is refused", function() return conf2 end, nil)
 check("error names AllowedIPs", function() return (tostring(err2):find("AllowedIPs", 1, true) ~= nil) end, true)
 
+print("\nconfig name limits")
+local okconf = tmpconf("[Interface]\nPrivateKey = aaaa\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = bbbb\nAllowedIPs = 10.0.0.0/24\n")
+check("a name the kernel cannot use is refused",
+    function() return (WG:_loadAndValidateConfig({ name = "a-name-that-is-too-long", path = okconf })) end, nil)
+check("a normal name is accepted",
+    function() return (WG:_loadAndValidateConfig({ name = "my-vpn", path = okconf })) ~= nil end, true)
+os.remove(okconf)
+
 print("\ninterface names used as patterns")
-local link = "6: home-vpn: <POINTOPOINT,NOARP> mtu 1420 state UNKNOWN"
-check("hyphen name matches itself", function() return link:match("%d+:%s+" .. WG._patternEscape("home-vpn") .. ":") ~= nil end, true)
-check("unescaped hyphen name does not", function() return link:match("%d+:%s+home-vpn:") ~= nil end, false)
+local link = "6: my-vpn: <POINTOPOINT,NOARP> mtu 1420 state UNKNOWN"
+check("hyphen name matches itself", function() return link:match("%d+:%s+" .. WG._patternEscape("my-vpn") .. ":") ~= nil end, true)
+check("unescaped hyphen name does not", function() return link:match("%d+:%s+my-vpn:") ~= nil end, false)
 
 print("\nstored routes")
 check("via form", function() return WG._parseStoredRoute("1.2.3.4 via 192.168.1.1 dev wlan0") end, "ip route del '1.2.3.4' via '192.168.1.1' dev 'wlan0'")
