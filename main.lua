@@ -33,6 +33,47 @@ local function exec(cmd)
     return ok, out
 end
 
+-- Everything from a .conf file reaches a root shell, so values are whitelisted
+-- on load and quoted at the point of use.
+local function shquote(s)
+    return "'" .. (tostring(s):gsub("'", "'\\''")) .. "'"
+end
+
+local function isIPv4(s)
+    local octets = { s:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$") }
+    if #octets ~= 4 then return false end
+    for _, o in ipairs(octets) do
+        if #o > 3 or tonumber(o) > 255 then return false end
+    end
+    return true
+end
+
+local function isIPv6(s)
+    return s:match("^[%x:]+$") ~= nil and s:find(":") ~= nil
+end
+
+local function isIP(s)
+    return isIPv4(s) or isIPv6(s)
+end
+
+local function isHostname(s)
+    return #s <= 253 and s:match("^%w[%w%.%-]*$") ~= nil
+end
+
+local function isCIDR(s)
+    local addr, prefix = s:match("^(.+)/(%d+)$")
+    if not addr then return false end
+    if isIPv4(addr) then return tonumber(prefix) <= 32 end
+    if isIPv6(addr) then return tonumber(prefix) <= 128 end
+    return false
+end
+
+-- Interface names are interpolated into Lua patterns as well as shell
+-- commands, and a config may legitimately be named "home-vpn".
+local function patternEscape(s)
+    return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"))
+end
+
 local function info(text, timeout)
     UIManager:show(InfoMessage:new{ text = text, timeout = timeout or 4 })
 end
@@ -95,15 +136,15 @@ end
 
 -- Parse a wg-quick style .conf into:
 --   wg_conf: pure [Interface]/[Peer] text suitable for `wg setconf`
---   iface:   { addresses, dns, mtu } extracted from the wg-quick keys
---   raw:     the original file contents (for endpoint/AllowedIPs scanning)
+--   iface:   { addresses, dns, mtu, endpoint, allowed_ips }
+--   raw:     the original file contents
 function WireGuard:parseConfig(path)
     local f = io.open(path, "r")
     if not f then return nil, "Cannot open " .. path end
     local text = f:read("*a")
     f:close()
 
-    local iface = { addresses = {}, dns = {}, mtu = nil }
+    local iface = { addresses = {}, dns = {}, mtu = nil, endpoint = nil, allowed_ips = {} }
     local wg_lines = {}
     local quick_keys = {
         address = true, dns = true, mtu = true, table = true,
@@ -134,6 +175,13 @@ function WireGuard:parseConfig(path)
                     iface.mtu = val:match("^%d+")
                 end
             else
+                if lk == "endpoint" and not iface.endpoint then
+                    iface.endpoint = val
+                elseif lk == "allowedips" then
+                    for cidr in val:gmatch("[^,%s]+") do
+                        table.insert(iface.allowed_ips, cidr)
+                    end
+                end
                 table.insert(wg_lines, line)
             end
         end
@@ -142,17 +190,16 @@ function WireGuard:parseConfig(path)
     return table.concat(wg_lines, "\n") .. "\n", iface, text
 end
 
-function WireGuard:getEndpointHost(raw)
-    local endpoint = raw:match("[Ee]ndpoint%s*=%s*([^\n]+)")
+function WireGuard:getEndpointHost(endpoint)
     if not endpoint then return nil end
-    endpoint = endpoint:match("^%s*(.-)%s*$")
     return endpoint:match("^%[(.+)%]:%d+$") or endpoint:match("^(.+):%d+$")
 end
 
 function WireGuard:resolveHost(host)
-    if host:match("^%d+%.%d+%.%d+%.%d+$") then return host end
-    local ok, out = exec("getent hosts " .. host)
-    if ok and out then return (out:match("^(%S+)")) end
+    if isIP(host) then return host end
+    local _ok, out = exec("getent hosts " .. shquote(host))
+    local first = (out or ""):match("^(%S+)")
+    if first and isIP(first) then return first end
     return nil
 end
 
@@ -171,6 +218,21 @@ function WireGuard:saveState(iface_name, routes)
     f:close()
 end
 
+-- Routes are stored as "<dest> dev <iface>" or "<dest> via <gw> dev <iface>".
+local function parseStoredRoute(line)
+    local dest, gw, dev = line:match("^(%S+) via (%S+) dev (%S+)$")
+    if dest then
+        if not (isCIDR(dest) or isIP(dest)) then return nil end
+        if not isIP(gw) or not dev:match("^[%w_%-]+$") then return nil end
+        return "ip route del " .. shquote(dest) .. " via " .. shquote(gw) .. " dev " .. shquote(dev)
+    end
+    dest, dev = line:match("^(%S+) dev (%S+)$")
+    if dest and (isCIDR(dest) or isIP(dest)) and dev:match("^[%w_%-]+$") then
+        return "ip route del " .. shquote(dest) .. " dev " .. shquote(dev)
+    end
+    return nil
+end
+
 function WireGuard:loadState()
     local f = io.open(STATE_FILE, "r")
     if not f then return nil, {} end
@@ -180,6 +242,7 @@ function WireGuard:loadState()
         if line ~= "" then table.insert(routes, line) end
     end
     f:close()
+    if iface_name and not iface_name:match("^[%w_%-]+$") then return nil, {} end
     return iface_name, routes
 end
 
@@ -219,8 +282,8 @@ end
 function WireGuard:waitForInterface(iface_name, attempts)
     for _ = 1, attempts or 6 do
         os.execute("sleep 0.5")
-        local ok, out = exec("ip link show " .. iface_name)
-        if ok and (out or ""):match(iface_name) then return true end
+        local _ok, out = exec("ip link show " .. shquote(iface_name))
+        if (out or ""):find(iface_name, 1, true) then return true end
     end
     return false
 end
@@ -255,9 +318,31 @@ function WireGuard:_loadAndValidateConfig(config)
         return nil, _("Config has no valid [Peer] section.")
     end
 
-    for _, addr in ipairs(iface.addresses) do
+    for _i, addr in ipairs(iface.addresses) do
         if not addr:match("/%d+$") then
             return nil, _("Address '") .. addr .. _("' has no /prefix (e.g. /32 or /24).")
+        end
+        if not isCIDR(addr) then
+            return nil, _("Address '") .. addr .. _("' is not a valid IP address.")
+        end
+    end
+
+    for _i, dns in ipairs(iface.dns) do
+        if not isIP(dns) then
+            return nil, _("DNS '") .. dns .. _("' is not a valid IP address.")
+        end
+    end
+
+    for _i, cidr in ipairs(iface.allowed_ips) do
+        if not isCIDR(cidr) then
+            return nil, _("AllowedIPs entry '") .. cidr .. _("' is not a valid network.")
+        end
+    end
+
+    if iface.endpoint then
+        local host = self:getEndpointHost(iface.endpoint)
+        if not host or not (isIP(host) or isHostname(host)) then
+            return nil, _("Endpoint '") .. iface.endpoint .. _("' is not a valid host:port.")
         end
     end
 
@@ -274,19 +359,19 @@ function WireGuard:_writeTempConfig(iface_name, wg_conf)
 end
 
 function WireGuard:_isInterfacePresent(iface_name)
-    local _ok, out = exec("ip link show " .. iface_name)
-    return (out or ""):match("%d+:%s+" .. iface_name .. ":") ~= nil
+    local _ok, out = exec("ip link show " .. shquote(iface_name))
+    return (out or ""):match("%d+:%s+" .. patternEscape(iface_name) .. ":") ~= nil
 end
 
 -- Starts wireguard-go and loads the config. Returns ok, err.
 function WireGuard:_spawnInterface(iface_name, tmp_conf)
-    os.execute(WG_GO_BIN .. " " .. iface_name .. " >/dev/null 2>&1 &")
+    os.execute(WG_GO_BIN .. " " .. shquote(iface_name) .. " >/dev/null 2>&1 &")
     if not self:waitForInterface(iface_name) then
         return false, _("wireguard-go did not create interface '") .. iface_name
             .. _("'.\n\nCheck that /dev/net/tun exists and ") .. WG_GO_BIN .. _(" is executable.")
     end
 
-    local ok, out = exec(WG_BIN .. " setconf " .. iface_name .. " '" .. tmp_conf .. "'")
+    local ok, out = exec(WG_BIN .. " setconf " .. shquote(iface_name) .. " " .. shquote(tmp_conf))
     if not ok then return false, _("wg setconf failed:\n") .. (out or "") end
     return true
 end
@@ -294,32 +379,32 @@ end
 -- Assigns addresses, sets MTU, brings link up. Returns ok, err; appends MTU
 -- failures to warnings.
 function WireGuard:_configureInterface(iface_name, iface, warnings)
-    for _, addr in ipairs(iface.addresses) do
-        local ok, out = exec("ip addr add " .. addr .. " dev " .. iface_name)
+    for _i, addr in ipairs(iface.addresses) do
+        local ok, out = exec("ip addr add " .. shquote(addr) .. " dev " .. shquote(iface_name))
         if not ok and not (out or ""):match("File exists") then
             return false, _("Failed to add address ") .. addr .. ":\n" .. (out or "")
         end
     end
 
-    local _v, addr_out = exec("ip addr show " .. iface_name)
+    local _v, addr_out = exec("ip addr show " .. shquote(iface_name))
     if not (addr_out or ""):match("inet ") then
         return false, _("Address assignment silently failed (no IPv4 on interface).\n\n") .. (addr_out or "")
     end
 
     if iface.mtu then
-        local ok, out = exec("ip link set mtu " .. iface.mtu .. " dev " .. iface_name)
+        local ok, out = exec("ip link set mtu " .. shquote(iface.mtu) .. " dev " .. shquote(iface_name))
         if not ok then table.insert(warnings, "MTU: " .. (out or "")) end
     end
 
-    local ok, out = exec("ip link set " .. iface_name .. " up")
+    local ok, out = exec("ip link set " .. shquote(iface_name) .. " up")
     if not ok then return false, _("Failed to bring up interface:\n") .. (out or "") end
     return true
 end
 
 -- Pin the endpoint to the original default route so handshake packets
 -- don't try to traverse the tunnel they're trying to establish.
-function WireGuard:_pinEndpointRoute(raw, tracked, warnings)
-    local host = self:getEndpointHost(raw)
+function WireGuard:_pinEndpointRoute(iface, tracked, warnings)
+    local host = self:getEndpointHost(iface.endpoint)
     if not host then return end
 
     local endpoint_ip = self:resolveHost(host)
@@ -335,7 +420,8 @@ function WireGuard:_pinEndpointRoute(raw, tracked, warnings)
     end
 
     local route = endpoint_ip .. " via " .. gw .. " dev " .. gw_dev
-    local ok, out = exec("ip route add " .. route)
+    local ok, out = exec("ip route add " .. shquote(endpoint_ip)
+        .. " via " .. shquote(gw) .. " dev " .. shquote(gw_dev))
     if ok then
         table.insert(tracked, route)
     elseif not (out or ""):match("File exists") then
@@ -345,7 +431,7 @@ end
 
 -- Installs routes for every AllowedIPs entry. Returns ok, err; err is set
 -- only if at least one route was attempted and they all failed.
-function WireGuard:_installAllowedIPs(raw, iface_name, tracked, warnings)
+function WireGuard:_installAllowedIPs(iface, iface_name, tracked, warnings)
     local attempted, added = 0, 0
     local function addRoute(cmd, label)
         attempted = attempted + 1
@@ -358,17 +444,16 @@ function WireGuard:_installAllowedIPs(raw, iface_name, tracked, warnings)
         end
     end
 
-    for allowed in raw:gmatch("[Aa]llowed[Ii][Pp]s%s*=%s*([^\n]+)") do
-        for cidr in allowed:gmatch("[^,%s]+") do
-            if cidr == "0.0.0.0/0" then
-                -- Two /1 routes beat the existing default without replacing it.
-                addRoute("ip route add 0.0.0.0/1 dev "   .. iface_name, "0.0.0.0/1 dev "   .. iface_name)
-                addRoute("ip route add 128.0.0.0/1 dev " .. iface_name, "128.0.0.0/1 dev " .. iface_name)
-            elseif cidr:match(":") then
-                addRoute("ip -6 route add " .. cidr .. " dev " .. iface_name, cidr .. " dev " .. iface_name)
-            else
-                addRoute("ip route add " .. cidr .. " dev " .. iface_name, cidr .. " dev " .. iface_name)
-            end
+    local dev = " dev " .. shquote(iface_name)
+    for _, cidr in ipairs(iface.allowed_ips) do
+        if cidr == "0.0.0.0/0" then
+            -- Two /1 routes beat the existing default without replacing it.
+            addRoute("ip route add 0.0.0.0/1" .. dev, "0.0.0.0/1 dev " .. iface_name)
+            addRoute("ip route add 128.0.0.0/1" .. dev, "128.0.0.0/1 dev " .. iface_name)
+        elseif cidr:match(":") then
+            addRoute("ip -6 route add " .. shquote(cidr) .. dev, cidr .. " dev " .. iface_name)
+        else
+            addRoute("ip route add " .. shquote(cidr) .. dev, cidr .. " dev " .. iface_name)
         end
     end
 
@@ -410,7 +495,7 @@ function WireGuard:_doConnect(config)
     local warnings = {}
 
     local function abort(msg)
-        exec("ip link del dev " .. iface_name)
+        exec("ip link del dev " .. shquote(iface_name))
         self:killProcess(iface_name)
         os.remove(tmp_conf)
         info(msg, 8)
@@ -422,9 +507,9 @@ function WireGuard:_doConnect(config)
     ok, err = self:_configureInterface(iface_name, iface, warnings)
     if not ok then abort(err); return end
 
-    self:_pinEndpointRoute(raw, tracked, warnings)
+    self:_pinEndpointRoute(iface, tracked, warnings)
 
-    ok, err = self:_installAllowedIPs(raw, iface_name, tracked, warnings)
+    ok, err = self:_installAllowedIPs(iface, iface_name, tracked, warnings)
     if not ok then abort(err); return end
 
     self:_writeResolvConf(iface.dns, warnings)
@@ -493,8 +578,11 @@ function WireGuard:disconnect(touchmenu_instance)
     info(_("Disconnecting WireGuard…"), 1)
     UIManager:forceRePaint()
 
-    for _, route in ipairs(routes) do exec("ip route del " .. route) end
-    exec("ip link del dev " .. iface_name)
+    for _, route in ipairs(routes) do
+        local cmd = parseStoredRoute(route)
+        if cmd then exec(cmd) end
+    end
+    exec("ip link del dev " .. shquote(iface_name))
     self:killProcess(iface_name)
 
     if fileExists(DNS_BACKUP) then
@@ -597,5 +685,13 @@ function WireGuard:addToMainMenu(menu_items)
         },
     }
 end
+
+-- Exposed for tests/run.lua.
+WireGuard._shquote          = shquote
+WireGuard._isIP             = isIP
+WireGuard._isCIDR           = isCIDR
+WireGuard._isHostname       = isHostname
+WireGuard._patternEscape    = patternEscape
+WireGuard._parseStoredRoute = parseStoredRoute
 
 return WireGuard
