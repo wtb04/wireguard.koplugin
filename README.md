@@ -158,6 +158,16 @@ Open Status first. It shows which binaries are present, the current `wg show` ou
 - `uname -m` on the device matches the arch you built the binaries for
 - the config file ends in `.conf` and sits in the folder above
 
+**Kindle: it connects but no traffic goes through**
+
+Kindle firmware firewalls the tunnel. Allow it, where the interface name is the one `ip a` shows for the tunnel:
+
+```sh
+iptables -I INPUT 1 -i <interface> -j ACCEPT
+```
+
+That lasts until reboot. Put the same line in `/etc/sysconfig/iptables` to keep it. Reported by [@Dasmonk3003](https://github.com/Dasmonk3003) in [#2](../../issues/2).
+
 **Names stop resolving after connecting**
 
 Bringing the tunnel up writes the DNS from your config into `/etc/resolv.conf` and keeps the original at `/tmp/resolv.wg.bak`. Disconnecting puts it back. If a disconnect never ran, because KOReader was killed or the battery went flat, the old DNS is still in that backup:
