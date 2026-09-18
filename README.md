@@ -4,7 +4,7 @@ A [KOReader](https://github.com/koreader/koreader) plugin to bring a WireGuard®
 
 I am not affiliated with KOReader or with WireGuard. Just a wrapper I made for my own use.
 
-Tested only on a **Kobo Clara Colour**. Other Kobo models will probably work, other devices YMMV.
+Tested on a **Kobo Clara Colour**. Other Kobo models will probably work, other devices YMMV.
 
 > **Looking for something easier?** If you just want a VPN on your e-reader and don't specifically need WireGuard, the [Tailscale plugin for KOReader](https://github.com/victoria-riley-barnett/koreader-tailscale) ships with an install script and works out of the box, no cross-compiling required.
 
@@ -14,14 +14,19 @@ Tested only on a **Kobo Clara Colour**. Other Kobo models will probably work, ot
 |---|---|---|
 | ![Menu location](screenshots/settings.png) | ![Config picker](screenshots/config-picker.png) | ![Status screen](screenshots/status.png) |
 
-## Compatibility
+## Will it work on my e-reader?
 
-| Device | Status | Notes |
-|---|---|---|
-| Kobo Clara Colour | Tested | My own device |
-| Other Kobo models | Expected to work | Reports welcome |
-| Kindle | Untested | I have no way to test this. If you got it working, let me know how so I can update this |
-| Android | Not the target | |
+The plugin needs a kernel feature called TUN. Most Kobo models have it. The Kobo Libra 2 and Clara 2E do not, and there is no way around that short of a custom kernel.
+
+Not sure about yours? Connect over [SSH](#ssh) and run:
+
+```sh
+zcat /proc/config.gz | grep CONFIG_TUN
+```
+
+`CONFIG_TUN=y` means you are good. `# CONFIG_TUN is not set` means this plugin cannot work on that device.
+
+Per-model data for current Kobo firmware is in [#1](../../issues/1), collected by [@ayaOwO](https://github.com/ayaOwO).
 
 ## 1. Build the binaries
 
