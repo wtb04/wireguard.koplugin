@@ -182,7 +182,7 @@ cp /tmp/resolv.wg.bak /etc/resolv.conf
 
 MIT, see [LICENSE](LICENSE).
 
-Made by [Wouter ten Brinke](https://woutertenbrinke.nl).
+Made by [Wouter ten Brinke](https://woutertenbrinke.nl), with a [write-up of the project](https://woutertenbrinke.nl/projects/koreader-wireguard) on my site.
 
 ## Trademarks
 
