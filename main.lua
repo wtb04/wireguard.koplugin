@@ -141,7 +141,8 @@ end
 
 -- Parse a wg-quick style .conf into:
 --   wg_conf: pure [Interface]/[Peer] text suitable for `wg setconf`
---   iface:   { addresses, dns, mtu, endpoint, allowed_ips }
+--   iface:   { addresses, dns, mtu, endpoint, endpoint_key, allowed_ips }
+--            endpoint_key is the PublicKey of the peer that owns endpoint.
 --   raw:     the original file contents
 function WireGuard:parseConfig(path)
     local f = io.open(path, "r")
@@ -158,6 +159,7 @@ function WireGuard:parseConfig(path)
     }
 
     local in_interface = false
+    local peer, endpoint_peer = nil, nil
     for line in text:gmatch("[^\r\n]+") do
         local trimmed = line:match("^%s*(.-)%s*$")
         if trimmed == "" or trimmed:sub(1, 1) == "#" then
@@ -167,6 +169,7 @@ function WireGuard:parseConfig(path)
             table.insert(wg_lines, line)
         elseif trimmed:lower():match("^%[peer%]") then
             in_interface = false
+            peer = {}
             table.insert(wg_lines, line)
         else
             local key, val = trimmed:match("^(%S+)%s*=%s*(.+)$")
@@ -182,6 +185,9 @@ function WireGuard:parseConfig(path)
             else
                 if lk == "endpoint" and not iface.endpoint then
                     iface.endpoint = val
+                    endpoint_peer = peer
+                elseif lk == "publickey" and peer then
+                    peer.key = val
                 elseif lk == "allowedips" then
                     for cidr in val:gmatch("[^,%s]+") do
                         table.insert(iface.allowed_ips, cidr)
@@ -192,6 +198,7 @@ function WireGuard:parseConfig(path)
         end
     end
 
+    iface.endpoint_key = endpoint_peer and endpoint_peer.key
     return table.concat(wg_lines, "\n") .. "\n", iface, text
 end
 
@@ -200,12 +207,30 @@ function WireGuard:getEndpointHost(endpoint)
     return endpoint:match("^%[(.+)%]:%d+$") or endpoint:match("^(.+):%d+$")
 end
 
-function WireGuard:resolveHost(host)
-    if isIP(host) then return host end
-    local _ok, out = exec("getent hosts " .. shquote(host))
-    local first = (out or ""):match("^(%S+)")
-    if first and isIP(first) then return first end
+-- Picks one peer's endpoint address out of `wg show <iface> endpoints`
+-- output, which is one "<public key>\t<ip>:<port>" line per peer. Peers are
+-- matched by key because wireguard-go does not list them in config order.
+local function endpointIPFor(wg_endpoints, pubkey)
+    for line in (wg_endpoints or ""):gmatch("[^\r\n]+") do
+        local key, endpoint = line:match("^(%S+)%s+(%S+)$")
+        if key == pubkey then
+            local ip = WireGuard:getEndpointHost(endpoint)
+            if ip and isIP(ip) then return ip end
+            return nil
+        end
+    end
     return nil
+end
+
+-- `wg setconf` has already resolved a hostname endpoint, so read back the
+-- address wg is actually using rather than resolving it again: Kobo firmware
+-- ships no getent, and a second lookup of a round-robin name can return a
+-- different address than the one wg picked.
+function WireGuard:resolveEndpoint(iface_name, host, pubkey)
+    if isIP(host) then return host end
+    if not pubkey then return nil end
+    local _ok, out = exec(WG_BIN .. " show " .. shquote(iface_name) .. " endpoints")
+    return endpointIPFor(out, pubkey)
 end
 
 function WireGuard:getDefaultGateway()
@@ -412,11 +437,11 @@ end
 
 -- Pin the endpoint to the original default route so handshake packets
 -- don't try to traverse the tunnel they're trying to establish.
-function WireGuard:_pinEndpointRoute(iface, tracked, warnings)
+function WireGuard:_pinEndpointRoute(iface, iface_name, tracked, warnings)
     local host = self:getEndpointHost(iface.endpoint)
     if not host then return end
 
-    local endpoint_ip = self:resolveHost(host)
+    local endpoint_ip = self:resolveEndpoint(iface_name, host, iface.endpoint_key)
     if not endpoint_ip then
         table.insert(warnings, "Could not resolve endpoint host '" .. host .. "'")
         return
@@ -524,7 +549,7 @@ function WireGuard:_doConnect(config)
     ok, err = self:_configureInterface(iface_name, iface, warnings)
     if not ok then abort(err); return end
 
-    self:_pinEndpointRoute(iface, tracked, warnings)
+    self:_pinEndpointRoute(iface, iface_name, tracked, warnings)
 
     ok, err = self:_installAllowedIPs(iface, iface_name, tracked, warnings)
     if not ok then abort(err); return end
@@ -710,5 +735,6 @@ WireGuard._isCIDR           = isCIDR
 WireGuard._isHostname       = isHostname
 WireGuard._patternEscape    = patternEscape
 WireGuard._parseStoredRoute = parseStoredRoute
+WireGuard._endpointIPFor    = endpointIPFor
 
 return WireGuard

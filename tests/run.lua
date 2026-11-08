@@ -150,6 +150,36 @@ check("strict pattern rejects the error text",
 check("strict pattern accepts a real link line",
     function() return ("6: wg0: <POINTOPOINT> mtu 1420"):match("%d+:%s+" .. WG._patternEscape("wg0") .. ":") ~= nil end, true)
 
+print("\nendpoint is read back from wg, not resolved again")
+local two_peers = tmpconf([[
+[Interface]
+PrivateKey = aaaa
+Address = 10.0.0.2/32
+
+[Peer]
+PublicKey = lan+peer/key=
+AllowedIPs = 10.0.0.3/32
+
+[Peer]
+Endpoint = vpn.example.com:51820
+PublicKey = server+key/abc=
+AllowedIPs = 0.0.0.0/0
+]])
+local _c, ep_iface = WG:parseConfig(two_peers)
+os.remove(two_peers)
+check("endpoint is tied to its own peer, even when listed before PublicKey",
+    function() return ep_iface.endpoint_key end, "server+key/abc=")
+local endpoints = "lan+peer/key=\t(none)\nserver+key/abc=\t1.2.3.4:51820\n"
+check("address is taken from the matching peer",
+    function() return WG._endpointIPFor(endpoints, "server+key/abc=") end, "1.2.3.4")
+check("peer without an endpoint gives nothing",
+    function() return WG._endpointIPFor(endpoints, "lan+peer/key=") end, nil)
+check("unknown peer gives nothing",
+    function() return WG._endpointIPFor(endpoints, "other=") end, nil)
+check("bracketed ipv6 endpoint",
+    function() return WG._endpointIPFor("k=\t[2001:db8::1]:51820\n", "k=") end, "2001:db8::1")
+check("no wg output gives nothing", function() return WG._endpointIPFor(nil, "k=") end, nil)
+
 if failed > 0 then
     print("\n" .. failed .. " failed")
     os.exit(1)
