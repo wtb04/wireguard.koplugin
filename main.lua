@@ -202,7 +202,7 @@ end
 
 function WireGuard:resolveHost(host)
     if isIP(host) then return host end
-    local _ok, out = exec("getent hosts " .. shquote(host))
+    local _ok, out = exec("nslookup " .. shquote(host) .. " | grep Address: | head -2 | tail -1 | sed 's/Address: //'")
     local first = (out or ""):match("^(%S+)")
     if first and isIP(first) then return first end
     return nil
