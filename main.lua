@@ -244,11 +244,33 @@ function WireGuard:resolveEndpoint(iface_name, host, pubkey)
     return endpointIPFor(out, pubkey)
 end
 
+-- Kobo's busybox `ip route show default` ignores the selector and prints the
+-- whole table, so only default routes count, and the gateway and the device
+-- must come from the same line. A multipath default lists its gateways on
+-- indented nexthop lines below it.
+local function parseDefaultRoute(out)
+    local in_default = false
+    for line in (out or ""):gmatch("[^\r\n]+") do
+        local candidate
+        if line:match("^default%s") then
+            in_default = true
+            candidate = line
+        elseif in_default and line:match("^%s+nexthop%s") then
+            candidate = line
+        else
+            in_default = false
+        end
+        if candidate then
+            local gw, dev = candidate:match("%svia%s+(%S+)"), candidate:match("%sdev%s+(%S+)")
+            if gw and dev and isIP(gw) and isDeviceName(dev) then return gw, dev end
+        end
+    end
+    return nil
+end
+
 function WireGuard:getDefaultGateway()
     local ok, out = exec("ip route show default")
-    if ok and out then
-        return out:match("via%s+(%S+)"), out:match("dev%s+(%S+)")
-    end
+    if ok then return parseDefaultRoute(out) end
 end
 
 function WireGuard:saveState(iface_name, routes)
@@ -753,5 +775,6 @@ WireGuard._parseStoredRoute = parseStoredRoute
 WireGuard._endpointIPFor    = endpointIPFor
 WireGuard._exec             = exec
 WireGuard._parseExecOutput  = parseExecOutput
+WireGuard._parseDefaultRoute = parseDefaultRoute
 
 return WireGuard

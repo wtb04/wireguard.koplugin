@@ -231,6 +231,29 @@ check("a route that really fails is not tracked", function()
     return ok == false and #tracked == 0
 end, true)
 
+print("\ndefault gateway")
+-- What Kobo prints for `ip route show default`: the whole table.
+local kobo_table = table.concat({
+    "0.0.0.0/1 dev wg0 scope link",
+    "10.1.1.0/24 via 10.0.0.1 dev wg0",
+    "default via 192.168.1.1 dev wlan0  metric 315",
+    "192.168.1.0/24 dev wlan0 scope link  src 192.168.1.2  metric 315",
+}, "\n")
+check("gateway comes from the default line",
+    function() return (WG._parseDefaultRoute(kobo_table)) end, "192.168.1.1")
+check("device comes from the same line",
+    function() return select(2, WG._parseDefaultRoute(kobo_table)) end, "wlan0")
+check("multipath default uses its first nexthop", function()
+    return select(2, WG._parseDefaultRoute("default proto static metric 1024\n"
+        .. "\tnexthop via 192.168.1.1 dev wlan0 weight 1\n\tnexthop via 10.0.0.1 dev eth0 weight 1\n"))
+end, "wlan0")
+check("nexthop lines of another route are ignored", function()
+    return WG._parseDefaultRoute("10.0.0.0/8 proto static\n\tnexthop via 10.0.0.1 dev eth0 weight 1\n")
+end, nil)
+check("no default route gives nothing",
+    function() return WG._parseDefaultRoute("192.168.1.0/24 dev wlan0 scope link") end, nil)
+check("error text gives nothing", function() return WG._parseDefaultRoute("ip: invalid argument") end, nil)
+
 if failed > 0 then
     print("\n" .. failed .. " failed")
     os.exit(1)
