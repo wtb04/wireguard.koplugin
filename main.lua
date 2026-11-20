@@ -12,6 +12,7 @@ local WG_GO_BIN  = "/usr/bin/wireguard-go"
 local TUN_DEV    = "/dev/net/tun"
 local STATE_FILE = "/tmp/wireguard_state"
 local DNS_BACKUP = "/tmp/resolv.wg.bak"
+local RESOLV_CONF = "/etc/resolv.conf"
 
 local WireGuard = WidgetContainer:extend{
     name = "wireguard",
@@ -42,6 +43,22 @@ local function exec(cmd)
     local raw = h:read("*a")
     h:close()
     return parseExecOutput(raw)
+end
+
+local function readFile(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local s = f:read("*a")
+    f:close()
+    return s
+end
+
+local function writeFile(path, s)
+    local f = io.open(path, "w")
+    if not f then return false end
+    local wrote = f:write(s)
+    local closed = f:close()
+    return wrote ~= nil and closed ~= nil
 end
 
 -- Everything from a .conf file reaches a root shell, so values are whitelisted
@@ -534,24 +551,47 @@ function WireGuard:_installAllowedIPs(iface, iface_name, tracked, warnings)
     return true
 end
 
+-- Backup and restore go through Lua rather than cp, which silently failed to
+-- restore on some Kindles and left the tunnel's DNS in place after
+-- disconnecting. A backup that is already there is the original from a
+-- session whose restore failed, so it is kept rather than overwritten with
+-- the tunnel's DNS.
+local function backupResolvConf(live, backup)
+    if fileExists(backup) then return true end
+    local s = readFile(live)
+    return s ~= nil and writeFile(backup, s)
+end
+
+-- Removes the backup only once it is safely back in place.
+local function restoreResolvConf(live, backup)
+    local s = readFile(backup)
+    if not s then return true end
+    if not writeFile(live, s) then return false end
+    os.remove(backup)
+    return true
+end
+
+local function resolvConfText(dns)
+    local lines, search = {}, {}
+    for _, d in ipairs(dns) do
+        if isIP(d) then
+            table.insert(lines, "nameserver " .. d)
+        else
+            table.insert(search, d)
+        end
+    end
+    if #search > 0 then table.insert(lines, "search " .. table.concat(search, " ")) end
+    return table.concat(lines, "\n") .. "\n"
+end
+
 function WireGuard:_writeResolvConf(dns, warnings)
     if #dns == 0 then return end
-    if not exec("cp /etc/resolv.conf " .. DNS_BACKUP) then
-        table.insert(warnings, "Could not back up /etc/resolv.conf")
+    if not backupResolvConf(RESOLV_CONF, DNS_BACKUP) then
+        -- Without a backup there is nothing to put back on disconnect.
+        table.insert(warnings, "Could not back up /etc/resolv.conf, DNS left unchanged")
+        return
     end
-    local r = io.open("/etc/resolv.conf", "w")
-    if r then
-        local search = {}
-        for _, d in ipairs(dns) do
-            if isIP(d) then
-                r:write("nameserver " .. d .. "\n")
-            else
-                table.insert(search, d)
-            end
-        end
-        if #search > 0 then r:write("search " .. table.concat(search, " ") .. "\n") end
-        r:close()
-    else
+    if not writeFile(RESOLV_CONF, resolvConfText(dns)) then
         table.insert(warnings, "Could not write /etc/resolv.conf")
     end
 end
@@ -664,15 +704,16 @@ function WireGuard:disconnect(touchmenu_instance)
     exec("ip link del dev " .. shquote(iface_name))
     self:killProcess(iface_name)
 
-    if fileExists(DNS_BACKUP) then
-        exec("cp " .. DNS_BACKUP .. " /etc/resolv.conf")
-    end
-
+    local dns_restored = restoreResolvConf(RESOLV_CONF, DNS_BACKUP)
     os.remove(STATE_FILE)
-    os.remove(DNS_BACKUP)
 
     if touchmenu_instance then touchmenu_instance:updateItems() end
-    info(_("WireGuard disconnected."), 3)
+    if dns_restored then
+        info(_("WireGuard disconnected."), 3)
+    else
+        logger.warn("WireGuard: could not restore /etc/resolv.conf from", DNS_BACKUP)
+        info(_("WireGuard disconnected, but /etc/resolv.conf could not be restored.\n\nThe original is kept in ") .. DNS_BACKUP, 8)
+    end
 end
 
 function WireGuard:showStatus()
@@ -776,5 +817,8 @@ WireGuard._endpointIPFor    = endpointIPFor
 WireGuard._exec             = exec
 WireGuard._parseExecOutput  = parseExecOutput
 WireGuard._parseDefaultRoute = parseDefaultRoute
+WireGuard._backupResolvConf = backupResolvConf
+WireGuard._restoreResolvConf = restoreResolvConf
+WireGuard._resolvConfText   = resolvConfText
 
 return WireGuard

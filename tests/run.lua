@@ -254,6 +254,29 @@ check("no default route gives nothing",
     function() return WG._parseDefaultRoute("192.168.1.0/24 dev wlan0 scope link") end, nil)
 check("error text gives nothing", function() return WG._parseDefaultRoute("ip: invalid argument") end, nil)
 
+print("\nresolv.conf is put back")
+local live, backup = os.tmpname(), os.tmpname()
+os.remove(backup)
+local function put(path, s) local f = assert(io.open(path, "w")); f:write(s); f:close() end
+local function get(path) local f = io.open(path, "r"); if not f then return nil end
+    local s = f:read("*a"); f:close(); return s end
+
+put(live, "nameserver 192.168.1.1\n")
+check("backup is taken", function() return WG._backupResolvConf(live, backup) end, true)
+put(live, WG._resolvConfText({ "10.0.0.1", "corp.example" }))
+check("tunnel dns is written", function() return get(live) end, "nameserver 10.0.0.1\nsearch corp.example\n")
+check("a second connect keeps the original backup",
+    function() WG._backupResolvConf(live, backup); return get(backup) end, "nameserver 192.168.1.1\n")
+check("restore succeeds", function() return WG._restoreResolvConf(live, backup) end, true)
+check("original is back", function() return get(live) end, "nameserver 192.168.1.1\n")
+check("backup is gone after restoring", function() return get(backup) end, nil)
+check("restoring with no backup is fine", function() return WG._restoreResolvConf(live, backup) end, true)
+put(backup, "nameserver 192.168.1.1\n")
+check("a failed restore keeps the backup", function()
+    return WG._restoreResolvConf("/nonexistent/dir/resolv.conf", backup) == false and get(backup) ~= nil
+end, true)
+os.remove(live); os.remove(backup)
+
 if failed > 0 then
     print("\n" .. failed .. " failed")
     os.exit(1)
