@@ -24,13 +24,24 @@ local function fileExists(path)
     return false
 end
 
+-- KOReader's LuaJIT has Lua 5.1 semantics, where popen():close() returns true
+-- even when the command failed. So the shell prints the exit code after the
+-- output and we read it back from there.
+local EXIT_MARK = "__wg_exit="
+
+local function parseExecOutput(raw)
+    local out, code = (raw or ""):match("^(.*)\n" .. EXIT_MARK .. "(%d+)\n?$")
+    if not out then return false, raw or "" end
+    return tonumber(code) == 0, out
+end
+
 local function exec(cmd)
     logger.dbg("WireGuard:", cmd)
-    local h = io.popen(cmd .. " 2>&1")
+    local h = io.popen("{ " .. cmd .. "; } 2>&1; rc=$?; echo; echo " .. EXIT_MARK .. "$rc")
     if not h then return false, "popen failed" end
-    local out = h:read("*a") or ""
-    local ok = h:close()
-    return ok, out
+    local raw = h:read("*a")
+    h:close()
+    return parseExecOutput(raw)
 end
 
 -- Everything from a .conf file reaches a root shell, so values are whitelisted
@@ -473,7 +484,11 @@ function WireGuard:_installAllowedIPs(iface, iface_name, tracked, warnings)
         if rok then
             table.insert(tracked, label)
             added = added + 1
-        elseif not (rout or ""):match("File exists") then
+        elseif (rout or ""):match("File exists") then
+            -- Already routed, often by the kernel for the interface's own
+            -- subnet. It works, but it is not ours to delete on disconnect.
+            added = added + 1
+        else
             table.insert(warnings, "route '" .. label .. "': " .. (rout or ""))
         end
     end
@@ -736,5 +751,7 @@ WireGuard._isHostname       = isHostname
 WireGuard._patternEscape    = patternEscape
 WireGuard._parseStoredRoute = parseStoredRoute
 WireGuard._endpointIPFor    = endpointIPFor
+WireGuard._exec             = exec
+WireGuard._parseExecOutput  = parseExecOutput
 
 return WireGuard

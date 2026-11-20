@@ -180,6 +180,57 @@ check("bracketed ipv6 endpoint",
     function() return WG._endpointIPFor("k=\t[2001:db8::1]:51820\n", "k=") end, "2001:db8::1")
 check("no wg output gives nothing", function() return WG._endpointIPFor(nil, "k=") end, nil)
 
+print("\nexec reports the real exit status")
+-- Run through a real shell: this is what close() got wrong on the device.
+check("a failing command is a failure", function() return (WG._exec("false")) end, false)
+check("a succeeding command is a success", function() return (WG._exec("true")) end, true)
+check("output comes back without the marker",
+    function() return select(2, WG._exec("echo hello")) end, "hello\n")
+check("output without a trailing newline is kept as is",
+    function() return select(2, WG._exec("printf abc")) end, "abc")
+check("stderr is captured", function() return select(2, WG._exec("echo oops >&2; false")) end, "oops\n")
+check("a missing command is a failure",
+    function() return (WG._exec("/nonexistent/getent hosts x")) end, false)
+check("missing marker counts as failure", function() return (WG._parseExecOutput("partial")) end, false)
+check("nonzero code", function() return (WG._parseExecOutput("x\n\n__wg_exit=2\n")) end, false)
+check("marker text inside the output does not confuse it",
+    function() return select(2, WG._parseExecOutput("a\n__wg_exit=1\n\n__wg_exit=0\n")) end, "a\n__wg_exit=1\n")
+
+-- Replaces io.popen so connect steps can be driven with scripted output.
+-- `script` maps a substring of the command to { output, exit code }.
+local function withFakeShell(script, fn)
+    local real = io.popen
+    io.popen = function(cmd)
+        for needle, res in pairs(script) do
+            if cmd:find(needle, 1, true) then
+                return { read = function() return res[1] .. "\n__wg_exit=" .. res[2] .. "\n" end,
+                         close = function() return true end }
+            end
+        end
+        return { read = function() return "\n__wg_exit=0\n" end, close = function() return true end }
+    end
+    local ok, a, b = pcall(fn)
+    io.popen = real
+    if not ok then error(a, 0) end
+    return a, b
+end
+
+print("\nroutes that already exist")
+check("a route the kernel already added does not abort the connect", function()
+    local tracked, warnings = {}, {}
+    local ok = withFakeShell({ ["ip route add"] = { "RTNETLINK answers: File exists", 2 } }, function()
+        return WG:_installAllowedIPs({ allowed_ips = { "10.0.0.0/24" } }, "wg0", tracked, warnings)
+    end)
+    return ok == true and #tracked == 0 and #warnings == 0
+end, true)
+check("a route that really fails is not tracked", function()
+    local tracked, warnings = {}, {}
+    local ok = withFakeShell({ ["ip route add"] = { "RTNETLINK answers: Network is down", 2 } }, function()
+        return WG:_installAllowedIPs({ allowed_ips = { "10.0.0.0/24" } }, "wg0", tracked, warnings)
+    end)
+    return ok == false and #tracked == 0
+end, true)
+
 if failed > 0 then
     print("\n" .. failed .. " failed")
     os.exit(1)
